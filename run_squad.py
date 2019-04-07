@@ -575,25 +575,8 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
   batch_size = final_hidden_shape[0]
   seq_length = final_hidden_shape[1]
   hidden_size = final_hidden_shape[2]
-
-  output_weights = tf.get_variable(
-    "cls/squad/output_weights", [2, hidden_size],
-    initializer=tf.truncated_normal_initializer(stddev=0.02))
-
-  output_bias = tf.get_variable(
-      "cls/squad/output_bias", [2], initializer=tf.zeros_initializer())
-
-  final_hidden_matrix = tf.reshape(final_hidden, [batch_size * seq_length, hidden_size])
-  logits = tf.matmul(final_hidden_matrix, output_weights, transpose_b=True)
-  logits = tf.nn.bias_add(logits, output_bias)
-
-  logits = tf.reshape(logits, [batch_size, seq_length, 2])
-  logits = tf.transpose(logits, [2, 0, 1])
-
-  unstacked_logits = tf.unstack(logits, axis=0)
-  (start_logits, end_logits) = (unstacked_logits[0], unstacked_logits[1])
-  return (start_logits, end_logits)
-
+  
+  return final_hidden[:,0,:]
 
 def model_fn_builder(bert_config, init_checkpoint, learning_rate,
                      num_train_steps, num_warmup_steps, use_tpu,
@@ -608,20 +591,38 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
       tf.logging.info("  name = %s, shape = %s" % (name, features[name].shape))
 
     unique_ids = features["unique_ids"]
-    input_ids = features["input_ids"]
-    input_mask = features["input_mask"]
-    segment_ids = features["segment_ids"]
+    phrase_context_input_ids = features["phrase_context_input_ids"]
+    phrase_context_input_mask = features["phrase_context_input_mask"]
+    phrase_context_segment_ids = features["phrase_context_segment_ids"]
 
+    question_input_ids = features["question_input_ids"]
+    question_input_mask = features["question_input_mask"]
+    question_segment_ids = features["question_segment_ids"]
+    
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
 
-    (start_logits, end_logits) = create_model(
+    if is_training:
+      label_sim = features["label_sim"]
+
+    phrase_embedding = create_model(
             bert_config=bert_config,
             is_training=is_training,
-            input_ids=input_ids,
-            input_mask=input_mask,
-            segment_ids=segment_ids,
+            input_ids=phrase_input_ids,
+            input_mask=phrase_input_mask,
+            segment_ids=phrase_segment_ids,
             use_one_hot_embeddings=use_one_hot_embeddings)
 
+    question_embedding = create_model(
+            bert_config=bert_config,
+            is_training=is_training,
+            input_ids=question_input_ids,
+            input_mask=question_input_mask,
+            segment_ids=question_segment_ids,
+            use_one_hot_embeddings=use_one_hot_embeddings)
+
+    norm_pe = tf.nn.l2_normalize(phrase_embedding)
+    norm_qe = tf.nn.l2_normalize(question_embedding)
+    
     tvars = tf.trainable_variables()
 
     initialized_variable_names = {}
@@ -641,23 +642,10 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
 
     output_spec = None
     if mode == tf.estimator.ModeKeys.TRAIN:
-      seq_length = modeling.get_shape_list(input_ids)[1]
-
-      def compute_loss(logits, positions):
-        one_hot_positions = tf.one_hot(
-            positions, depth=seq_length, dtype=tf.float32)
-        log_probs = tf.nn.log_softmax(logits, axis=-1)
-        loss = -tf.reduce_mean(
-            tf.reduce_sum(one_hot_positions * log_probs, axis=-1))
-        return loss
-
-      start_positions = features["start_positions"]
-      end_positions = features["end_positions"]
-
-      start_loss = compute_loss(start_logits, start_positions)
-      end_loss = compute_loss(end_logits, end_positions)
-
-      total_loss = (start_loss + end_loss) / 2.0
+      similarity = tf.reduce_sum(norm_pe * norm_qe, axis=1)
+      similarity_scaled = (similiarity - 0.5) * 32
+      loss_sim = tf.nn.sigmoid_cross_entropy_with_logits(logits=similarity_scaled, label=label_sim)
+      total_loss = tf.reduce_sum(loss_sim)
 
       global_step = tf.train.get_or_create_global_step()
       optimizer = optimization.create_optimizer(
@@ -670,8 +658,8 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     elif mode == tf.estimator.ModeKeys.PREDICT:
       predictions = {
           "unique_ids": unique_ids,
-          "start_logits": start_logits,
-          "end_logits": end_logits,
+          "phrase_embeddings": pharse_embedding,
+          "question_embeddings": question_embedding,
       }
       output_spec = tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
     else:
@@ -683,19 +671,21 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
   return model_fn
 
 
-def input_fn_builder(input_file, seq_length, is_training, drop_remainder):
+def input_fn_builder(input_file, phrase_context_seq_length, question_seq_length, is_training, drop_remainder):
   """Creates an `input_fn` closure to be passed to TPUEstimator."""
 
   name_to_features = {
       "unique_ids": tf.FixedLenFeature([], tf.int64),
-      "input_ids": tf.FixedLenFeature([seq_length], tf.int64),
-      "input_mask": tf.FixedLenFeature([seq_length], tf.int64),
-      "segment_ids": tf.FixedLenFeature([seq_length], tf.int64),
+      "phrase_context_input_ids": tf.FixedLenFeature([phrase_context_seq_length], tf.int64),
+      "phrase_context_input_mask": tf.FixedLenFeature([phrase_context_seq_length], tf.int64),
+      "phrase_context_segment_ids": tf.FixedLenFeature([phrase_context_seq_length], tf.int64),
+      "question_input_ids": tf.FixedLenFeature([question_seq_length], tf.int64),
+      "question_input_mask": tf.FixedLenFeature([question_seq_length], tf.int64),
+      "question_segment_ids": tf.FixedLenFeature([question_seq_length], tf.int64),    
   }
 
   if is_training:
-    name_to_features["start_positions"] = tf.FixedLenFeature([], tf.int64)
-    name_to_features["end_positions"] = tf.FixedLenFeature([], tf.int64)
+    name_to_features["label_sim"] = tf.FixedLenFeature([], tf.int64)
 
   def _decode_record(record, name_to_features):
     """Decodes a record to a TensorFlow example."""
@@ -1074,17 +1064,16 @@ class FeatureWriter(object):
 
     features = collections.OrderedDict()
     features["unique_ids"] = create_int_feature([feature.unique_id])
-    features["input_ids"] = create_int_feature(feature.input_ids)
-    features["input_mask"] = create_int_feature(feature.input_mask)
-    features["segment_ids"] = create_int_feature(feature.segment_ids)
+    features["phrase_context_input_ids"] = create_int_feature(feature.phrase_context_input_ids)
+    features["phrase_context_input_mask"] = create_int_feature(feature.phrase_context_input_mask)
+    features["phrase_context_segment_ids"] = create_int_feature(feature.phrase_context_segment_ids)
+
+    features["question_input_ids"] = create_int_feature(feature.question_input_ids)
+    features["question_input_mask"] = create_int_feature(feature.question_input_mask)
+    features["question_segment_ids"] = create_int_feature(feature.question_segment_ids)
 
     if self.is_training:
-      features["start_positions"] = create_int_feature([feature.start_position])
-      features["end_positions"] = create_int_feature([feature.end_position])
-      impossible = 0
-      if feature.is_impossible:
-        impossible = 1
-      features["is_impossible"] = create_int_feature([impossible])
+      features["label_sim"] = create_int_feature([feature.label_sim])
 
     tf_example = tf.train.Example(features=tf.train.Features(feature=features))
     self._writer.write(tf_example.SerializeToString())
