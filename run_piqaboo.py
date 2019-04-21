@@ -83,6 +83,8 @@ flags.DEFINE_bool("do_train", False, "Whether to run training.")
 
 flags.DEFINE_bool("do_predict", False, "Whether to run eval on the dev set.")
 
+flags.DEFINE_string("input_type", "train", "set this to train | context | question")
+
 flags.DEFINE_integer("train_batch_size", 32, "Total batch size for training.")
 
 flags.DEFINE_integer("predict_batch_size", 8,
@@ -591,40 +593,43 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
       tf.logging.info("  name = %s, shape = %s" % (name, features[name].shape))
 
     unique_ids = features["unique_ids"]
-    phrase_context_input_ids = features["phrase_context_input_ids"]
-    phrase_context_input_mask = features["phrase_context_input_mask"]
-    phrase_context_segment_ids = features["phrase_context_segment_ids"]
 
-    question_input_ids = features["question_input_ids"]
-    question_input_mask = features["question_input_mask"]
-    question_segment_ids = features["question_segment_ids"]
+    if FLAGS.input_type == "context" or FLAGS.input_type == "train":
+      phrase_context_input_ids = features["phrase_context_input_ids"]
+      phrase_context_input_mask = features["phrase_context_input_mask"]
+      phrase_context_segment_ids = features["phrase_context_segment_ids"]
+
+    if FLAGS.input_type == "question" or FLAGS.input_type == "train":
+      question_input_ids = features["question_input_ids"]
+      question_input_mask = features["question_input_mask"]
+      question_segment_ids = features["question_segment_ids"]
     
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
 
     if is_training:
       label_sim = features["label_sim"]
 
-    phrase_embedding = create_model(
+    if FLAGS.input_type == "context" or FLAGS.input_type == "train":
+      phrase_embedding = create_model(
             bert_config=bert_config,
             is_training=is_training,
             input_ids=phrase_input_ids,
             input_mask=phrase_input_mask,
             segment_ids=phrase_segment_ids,
             use_one_hot_embeddings=use_one_hot_embeddings)
+      norm_pe = tf.nn.l2_normalize(phrase_embedding)
 
-    question_embedding = create_model(
+    if FLAGS.input_type == "question" or FLAGS.input_type == "train":
+      question_embedding = create_model(
             bert_config=bert_config,
             is_training=is_training,
             input_ids=question_input_ids,
             input_mask=question_input_mask,
             segment_ids=question_segment_ids,
             use_one_hot_embeddings=use_one_hot_embeddings)
-
-    norm_pe = tf.nn.l2_normalize(phrase_embedding)
-    norm_qe = tf.nn.l2_normalize(question_embedding)
+      norm_qe = tf.nn.l2_normalize(question_embedding)
     
     tvars = tf.trainable_variables()
-
     initialized_variable_names = {}
     scaffold_fn = None
     if init_checkpoint:
@@ -656,11 +661,11 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
       output_spec = tf.estimator.EstimatorSpec(mode=mode, loss=total_loss, train_op=train_op)
 
     elif mode == tf.estimator.ModeKeys.PREDICT:
-      predictions = {
-          "unique_ids": unique_ids,
-          "phrase_embeddings": pharse_embedding,
-          "question_embeddings": question_embedding,
-      }
+      predictions = {"unique_ids": unique_ids}
+      if FLAGS.input_type == "context" or FLAGS.input_type == "train":
+        predictions["phrase_embeddings"] =  pharse_embedding
+      if FLAGS.input_type == "question" or FLAGS.input_type == "train":
+        predictions["question_embeddings"] = question_embedding
       output_spec = tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
     else:
       raise ValueError(
@@ -675,14 +680,18 @@ def input_fn_builder(input_file, phrase_context_seq_length, question_seq_length,
   """Creates an `input_fn` closure to be passed to TPUEstimator."""
 
   name_to_features = {
-      "unique_ids": tf.FixedLenFeature([], tf.int64),
-      "phrase_context_input_ids": tf.FixedLenFeature([phrase_context_seq_length], tf.int64),
-      "phrase_context_input_mask": tf.FixedLenFeature([phrase_context_seq_length], tf.int64),
-      "phrase_context_segment_ids": tf.FixedLenFeature([phrase_context_seq_length], tf.int64),
-      "question_input_ids": tf.FixedLenFeature([question_seq_length], tf.int64),
-      "question_input_mask": tf.FixedLenFeature([question_seq_length], tf.int64),
-      "question_segment_ids": tf.FixedLenFeature([question_seq_length], tf.int64),    
+      "unique_ids": tf.FixedLenFeature([], tf.int64)  
   }
+
+  if FLAGS.input_type == "context" or FLAGS.input_type == "train":
+    name_to_features["phrase_context_input_ids"] = tf.FixedLenFeature([phrase_context_seq_length], tf.int64)
+    name_to_features["phrase_context_input_mask"] = tf.FixedLenFeature([phrase_context_seq_length], tf.int64)
+    name_to_features["phrase_context_segment_ids"] = tf.FixedLenFeature([phrase_context_seq_length], tf.int64)
+
+  if FLAGS.input_type == "question" or FLAGS.input_type == "train:"
+    name_to_features["question_input_ids"] = tf.FixedLenFeature([question_seq_length], tf.int64)
+    name_to_features["question_input_mask"] = tf.FixedLenFeature([question_seq_length], tf.int64)
+    name_to_features["question_segment_ids"] = tf.FixedLenFeature([question_seq_length], tf.int64)  
 
   if is_training:
     name_to_features["label_sim"] = tf.FixedLenFeature([], tf.int64)
@@ -1064,13 +1073,16 @@ class FeatureWriter(object):
 
     features = collections.OrderedDict()
     features["unique_ids"] = create_int_feature([feature.unique_id])
-    features["phrase_context_input_ids"] = create_int_feature(feature.phrase_context_input_ids)
-    features["phrase_context_input_mask"] = create_int_feature(feature.phrase_context_input_mask)
-    features["phrase_context_segment_ids"] = create_int_feature(feature.phrase_context_segment_ids)
 
-    features["question_input_ids"] = create_int_feature(feature.question_input_ids)
-    features["question_input_mask"] = create_int_feature(feature.question_input_mask)
-    features["question_segment_ids"] = create_int_feature(feature.question_segment_ids)
+    if FLAGS.input_type == "context" or FLAGS.input_type == "train":
+      features["phrase_context_input_ids"] = create_int_feature(feature.phrase_context_input_ids)
+      features["phrase_context_input_mask"] = create_int_feature(feature.phrase_context_input_mask)
+      features["phrase_context_segment_ids"] = create_int_feature(feature.phrase_context_segment_ids)
+
+    if FLAGS.inpu_type == "question" or FLAGS.input_type == "train":
+      features["question_input_ids"] = create_int_feature(feature.question_input_ids)
+      features["question_input_mask"] = create_int_feature(feature.question_input_mask)
+      features["question_segment_ids"] = create_int_feature(feature.question_segment_ids)
 
     if self.is_training:
       features["label_sim"] = create_int_feature([feature.label_sim])
