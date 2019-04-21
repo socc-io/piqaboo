@@ -28,6 +28,7 @@ import optimization
 import tokenization
 import six
 import tensorflow as tf
+import numpy as np
 
 flags = tf.flags
 
@@ -580,9 +581,9 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
       phrase_embedding = create_model(
             bert_config=bert_config,
             is_training=is_training,
-            input_ids=phrase_input_ids,
-            input_mask=phrase_input_mask,
-            segment_ids=phrase_segment_ids,
+            input_ids=phrase_context_input_ids,
+            input_mask=phrase_context_input_mask,
+            segment_ids=phrase_context_segment_ids,
             use_one_hot_embeddings=use_one_hot_embeddings)
       norm_pe = tf.nn.l2_normalize(phrase_embedding)
 
@@ -595,7 +596,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
             segment_ids=question_segment_ids,
             use_one_hot_embeddings=use_one_hot_embeddings)
       norm_qe = tf.nn.l2_normalize(question_embedding)
-    
+
     tvars = tf.trainable_variables()
     initialized_variable_names = {}
     scaffold_fn = None
@@ -615,7 +616,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     output_spec = None
     if mode == tf.estimator.ModeKeys.TRAIN:
       similarity = tf.reduce_sum(norm_pe * norm_qe, axis=1)
-      similarity_scaled = (similiarity - 0.5) * 32
+      similarity_scaled = (similarity - 0.5) * 32
       loss_sim = tf.nn.sigmoid_cross_entropy_with_logits(logits=similarity_scaled, label=label_sim)
       total_loss = tf.reduce_sum(loss_sim)
 
@@ -630,7 +631,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     elif mode == tf.estimator.ModeKeys.PREDICT:
       predictions = {"unique_ids": unique_ids}
       if FLAGS.input_type == "context" or FLAGS.input_type == "train":
-        predictions["phrase_embeddings"] =  pharse_embedding
+        predictions["phrase_embeddings"] =  phrase_embedding
       if FLAGS.input_type == "question" or FLAGS.input_type == "train":
         predictions["question_embeddings"] = question_embedding
       output_spec = tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
@@ -655,7 +656,7 @@ def input_fn_builder(input_file, phrase_context_seq_length, question_seq_length,
     name_to_features["phrase_context_input_mask"] = tf.FixedLenFeature([phrase_context_seq_length], tf.int64)
     name_to_features["phrase_context_segment_ids"] = tf.FixedLenFeature([phrase_context_seq_length], tf.int64)
 
-  if FLAGS.input_type == "question" or FLAGS.input_type == "train:"
+  if FLAGS.input_type == "question" or FLAGS.input_type == "train:":
     name_to_features["question_input_ids"] = tf.FixedLenFeature([question_seq_length], tf.int64)
     name_to_features["question_input_mask"] = tf.FixedLenFeature([question_seq_length], tf.int64)
     name_to_features["question_segment_ids"] = tf.FixedLenFeature([question_seq_length], tf.int64)  
@@ -700,325 +701,85 @@ def input_fn_builder(input_file, phrase_context_seq_length, question_seq_length,
 
 
 RawResult = collections.namedtuple("RawResult",
-                                   ["unique_id", "start_logits", "end_logits"])
+            ["unique_id", "phrase_embedding", "question_embedding"])
 
 
-def write_predictions(all_examples, all_features, all_results, n_best_size,
-                      max_answer_length, do_lower_case, output_prediction_file,
-                      output_nbest_file, output_null_log_odds_file):
-  """Write final predictions to the json file and log-odds of null if needed."""
-  tf.logging.info("Writing predictions to: %s" % (output_prediction_file))
-  tf.logging.info("Writing nbest to: %s" % (output_nbest_file))
+def write_predictions_piqa(all_features, all_results, output_context_dir, output_question_dir):
+  """Output format for PIQA
+  each .npz in context_emb is '%s_%d'.npz % (article_title, para_idx)
+  each .npz in context_emb is N phrase vectors of d-dim: N x d
+  each .json is a list of N phrases
+  each.npz in question_emb is '%s'.npz % (question_id)
+  each.npz in question_emb must be 1 x d matrix
 
-  example_index_to_features = collections.defaultdict(list)
-  for feature in all_features:
-    example_index_to_features[feature.example_index].append(feature)
+  * feature.unique_id -> (article_title, para_idx, phrase_idx, qid)
 
+  * all_context_embedding = {
+   "title": { # article
+     "12" : [ # para
+       {
+         "embedding" : [1,1,1,1,1,1],
+         "phrase-text" : "phrase text"
+       }
+     ]
+   }}
+
+  * all_question_embedding = {
+   "qid": [1,1,1,1,1]
+  }
+  """
   unique_id_to_result = {}
   for result in all_results:
     unique_id_to_result[result.unique_id] = result
 
-  _PrelimPrediction = collections.namedtuple(  # pylint: disable=invalid-name
-      "PrelimPrediction",
-      ["feature_index", "start_index", "end_index", "start_logit", "end_logit"])
+  all_context_embedding = {}
+  all_question_embedding = {}
 
-  all_predictions = collections.OrderedDict()
-  all_nbest_json = collections.OrderedDict()
-  scores_diff_json = collections.OrderedDict()
+  for (feature_index, feature) in enumerate(all_features):
+    article_title = feature.article_title
+    para_idx = str(feature.para_idx)
+    phrase_text = feature.phrase_text
+    qid = feature.qid
+    result_entry = unique_id_to_result[feature.result.unique_id]
+    if FLAGS.input_type == "context" or FLAGS.input_type == "train":
+      phrase_embedding = result_entry.phrase_embedding
+      context_embedding_entry = all_context_embedding.get(article_title, {})
+      paragraph_entry = context_embedding_entry.get(para_idx, [])
+      paragraph_entry.append({
+        "embedding" : list(phrase_embedding),
+        "phrase-text" : phrase_text
+      })
+      context_embedding_entry[para_idx] = paragraph_entry
+      all_context_embedding[article_title] = context_embedding_entry
 
-  for (example_index, example) in enumerate(all_examples):
-    features = example_index_to_features[example_index]
+    if FLAGS.inpu_type == "question" or FLAGS.input_type == "train":
+      question_embedding = result_entry.question_embedding
+      all_question_embedding[qid] = list(question_embedding)
 
-    prelim_predictions = []
-    # keep track of the minimum score of null start+end of position 0
-    score_null = 1000000  # large and positive
-    min_null_feature_index = 0  # the paragraph slice with min mull score
-    null_start_logit = 0  # the start logit at the slice with min null score
-    null_end_logit = 0  # the end logit at the slice with min null score
-    for (feature_index, feature) in enumerate(features):
-      result = unique_id_to_result[feature.unique_id]
-      start_indexes = _get_best_indexes(result.start_logits, n_best_size)
-      end_indexes = _get_best_indexes(result.end_logits, n_best_size)
-      # if we could have irrelevant answers, get the min score of irrelevant
-      if FLAGS.version_2_with_negative:
-        feature_null_score = result.start_logits[0] + result.end_logits[0]
-        if feature_null_score < score_null:
-          score_null = feature_null_score
-          min_null_feature_index = feature_index
-          null_start_logit = result.start_logits[0]
-          null_end_logit = result.end_logits[0]
-      for start_index in start_indexes:
-        for end_index in end_indexes:
-          # We could hypothetically create invalid predictions, e.g., predict
-          # that the start of the span is in the question. We throw out all
-          # invalid predictions.
-          if start_index >= len(feature.tokens):
-            continue
-          if end_index >= len(feature.tokens):
-            continue
-          if start_index not in feature.token_to_orig_map:
-            continue
-          if end_index not in feature.token_to_orig_map:
-            continue
-          if not feature.token_is_max_context.get(start_index, False):
-            continue
-          if end_index < start_index:
-            continue
-          length = end_index - start_index + 1
-          if length > max_answer_length:
-            continue
-          prelim_predictions.append(
-              _PrelimPrediction(
-                  feature_index=feature_index,
-                  start_index=start_index,
-                  end_index=end_index,
-                  start_logit=result.start_logits[start_index],
-                  end_logit=result.end_logits[end_index]))
+  for title in all_context_embedding.keys():
+    para_entry = all_context_embedding[title]
+    for para_key in para_entry.keys():
+      phrase_list = para_entry[para_key]
+      phrase_embedding_list = []
+      phrase_text_list = []
+      for phrase in phrase_list:
+        phrase_embedding_list.append(phrase["embedding"])
+        phrase_text_list.append(phrase["phrase-text"])
+      phrase_embedding_np = np.array(phrase_embedding_list)
 
-    if FLAGS.version_2_with_negative:
-      prelim_predictions.append(
-          _PrelimPrediction(
-              feature_index=min_null_feature_index,
-              start_index=0,
-              end_index=0,
-              start_logit=null_start_logit,
-              end_logit=null_end_logit))
-    prelim_predictions = sorted(
-        prelim_predictions,
-        key=lambda x: (x.start_logit + x.end_logit),
-        reverse=True)
+      filename_np = os.path.join(output_context_dir, "%s_%s" % (title, para_key))
+      np.savez(filename_np, phrase_embedding_np)
 
-    _NbestPrediction = collections.namedtuple(  # pylint: disable=invalid-name
-        "NbestPrediction", ["text", "start_logit", "end_logit"])
+      filename_json = os.path.join(output_context_dir, "%s_%s" % (title, para_key))
+      with open(filename_json, "w") as fp:
+        fp.write(json.dumps(phrase_text_list))
 
-    seen_predictions = {}
-    nbest = []
-    for pred in prelim_predictions:
-      if len(nbest) >= n_best_size:
-        break
-      feature = features[pred.feature_index]
-      if pred.start_index > 0:  # this is a non-null prediction
-        tok_tokens = feature.tokens[pred.start_index:(pred.end_index + 1)]
-        orig_doc_start = feature.token_to_orig_map[pred.start_index]
-        orig_doc_end = feature.token_to_orig_map[pred.end_index]
-        orig_tokens = example.doc_tokens[orig_doc_start:(orig_doc_end + 1)]
-        tok_text = " ".join(tok_tokens)
+  for qid in all_question_embedding:
+    question_embedding_np = np.array(all_question_embedding[qid])
+    filename_np = os.path.join(output_question_dir, "%s" % (qid))
+    np.savez(filename_np, question_embedding_np)
 
-        # De-tokenize WordPieces that have been split off.
-        tok_text = tok_text.replace(" ##", "")
-        tok_text = tok_text.replace("##", "")
-
-        # Clean whitespace
-        tok_text = tok_text.strip()
-        tok_text = " ".join(tok_text.split())
-        orig_text = " ".join(orig_tokens)
-
-        final_text = get_final_text(tok_text, orig_text, do_lower_case)
-        if final_text in seen_predictions:
-          continue
-
-        seen_predictions[final_text] = True
-      else:
-        final_text = ""
-        seen_predictions[final_text] = True
-
-      nbest.append(
-          _NbestPrediction(
-              text=final_text,
-              start_logit=pred.start_logit,
-              end_logit=pred.end_logit))
-
-    # if we didn't inlude the empty option in the n-best, inlcude it
-    if FLAGS.version_2_with_negative:
-      if "" not in seen_predictions:
-        nbest.append(
-            _NbestPrediction(
-                text="", start_logit=null_start_logit,
-                end_logit=null_end_logit))
-    # In very rare edge cases we could have no valid predictions. So we
-    # just create a nonce prediction in this case to avoid failure.
-    if not nbest:
-      nbest.append(
-          _NbestPrediction(text="empty", start_logit=0.0, end_logit=0.0))
-
-    assert len(nbest) >= 1
-
-    total_scores = []
-    best_non_null_entry = None
-    for entry in nbest:
-      total_scores.append(entry.start_logit + entry.end_logit)
-      if not best_non_null_entry:
-        if entry.text:
-          best_non_null_entry = entry
-
-    probs = _compute_softmax(total_scores)
-
-    nbest_json = []
-    for (i, entry) in enumerate(nbest):
-      output = collections.OrderedDict()
-      output["text"] = entry.text
-      output["probability"] = probs[i]
-      output["start_logit"] = entry.start_logit
-      output["end_logit"] = entry.end_logit
-      nbest_json.append(output)
-
-    assert len(nbest_json) >= 1
-
-    if not FLAGS.version_2_with_negative:
-      all_predictions[example.qas_id] = nbest_json[0]["text"]
-    else:
-      # predict "" iff the null score - the score of best non-null > threshold
-      score_diff = score_null - best_non_null_entry.start_logit - (
-          best_non_null_entry.end_logit)
-      scores_diff_json[example.qas_id] = score_diff
-      if score_diff > FLAGS.null_score_diff_threshold:
-        all_predictions[example.qas_id] = ""
-      else:
-        all_predictions[example.qas_id] = best_non_null_entry.text
-
-    all_nbest_json[example.qas_id] = nbest_json
-
-  with tf.gfile.GFile(output_prediction_file, "w") as writer:
-    writer.write(json.dumps(all_predictions, indent=4) + "\n")
-
-  with tf.gfile.GFile(output_nbest_file, "w") as writer:
-    writer.write(json.dumps(all_nbest_json, indent=4) + "\n")
-
-  if FLAGS.version_2_with_negative:
-    with tf.gfile.GFile(output_null_log_odds_file, "w") as writer:
-      writer.write(json.dumps(scores_diff_json, indent=4) + "\n")
-
-
-def get_final_text(pred_text, orig_text, do_lower_case):
-  """Project the tokenized prediction back to the original text."""
-
-  # When we created the data, we kept track of the alignment between original
-  # (whitespace tokenized) tokens and our WordPiece tokenized tokens. So
-  # now `orig_text` contains the span of our original text corresponding to the
-  # span that we predicted.
-  #
-  # However, `orig_text` may contain extra characters that we don't want in
-  # our prediction.
-  #
-  # For example, let's say:
-  #   pred_text = steve smith
-  #   orig_text = Steve Smith's
-  #
-  # We don't want to return `orig_text` because it contains the extra "'s".
-  #
-  # We don't want to return `pred_text` because it's already been normalized
-  # (the SQuAD eval script also does punctuation stripping/lower casing but
-  # our tokenizer does additional normalization like stripping accent
-  # characters).
-  #
-  # What we really want to return is "Steve Smith".
-  #
-  # Therefore, we have to apply a semi-complicated alignment heruistic between
-  # `pred_text` and `orig_text` to get a character-to-charcter alignment. This
-  # can fail in certain cases in which case we just return `orig_text`.
-
-  def _strip_spaces(text):
-    ns_chars = []
-    ns_to_s_map = collections.OrderedDict()
-    for (i, c) in enumerate(text):
-      if c == " ":
-        continue
-      ns_to_s_map[len(ns_chars)] = i
-      ns_chars.append(c)
-    ns_text = "".join(ns_chars)
-    return (ns_text, ns_to_s_map)
-
-  # We first tokenize `orig_text`, strip whitespace from the result
-  # and `pred_text`, and check if they are the same length. If they are
-  # NOT the same length, the heuristic has failed. If they are the same
-  # length, we assume the characters are one-to-one aligned.
-  tokenizer = tokenization.BasicTokenizer(do_lower_case=do_lower_case)
-
-  tok_text = " ".join(tokenizer.tokenize(orig_text))
-
-  start_position = tok_text.find(pred_text)
-  if start_position == -1:
-    if FLAGS.verbose_logging:
-      tf.logging.info(
-          "Unable to find text: '%s' in '%s'" % (pred_text, orig_text))
-    return orig_text
-  end_position = start_position + len(pred_text) - 1
-
-  (orig_ns_text, orig_ns_to_s_map) = _strip_spaces(orig_text)
-  (tok_ns_text, tok_ns_to_s_map) = _strip_spaces(tok_text)
-
-  if len(orig_ns_text) != len(tok_ns_text):
-    if FLAGS.verbose_logging:
-      tf.logging.info("Length not equal after stripping spaces: '%s' vs '%s'",
-                      orig_ns_text, tok_ns_text)
-    return orig_text
-
-  # We then project the characters in `pred_text` back to `orig_text` using
-  # the character-to-character alignment.
-  tok_s_to_ns_map = {}
-  for (i, tok_index) in six.iteritems(tok_ns_to_s_map):
-    tok_s_to_ns_map[tok_index] = i
-
-  orig_start_position = None
-  if start_position in tok_s_to_ns_map:
-    ns_start_position = tok_s_to_ns_map[start_position]
-    if ns_start_position in orig_ns_to_s_map:
-      orig_start_position = orig_ns_to_s_map[ns_start_position]
-
-  if orig_start_position is None:
-    if FLAGS.verbose_logging:
-      tf.logging.info("Couldn't map start position")
-    return orig_text
-
-  orig_end_position = None
-  if end_position in tok_s_to_ns_map:
-    ns_end_position = tok_s_to_ns_map[end_position]
-    if ns_end_position in orig_ns_to_s_map:
-      orig_end_position = orig_ns_to_s_map[ns_end_position]
-
-  if orig_end_position is None:
-    if FLAGS.verbose_logging:
-      tf.logging.info("Couldn't map end position")
-    return orig_text
-
-  output_text = orig_text[orig_start_position:(orig_end_position + 1)]
-  return output_text
-
-
-def _get_best_indexes(logits, n_best_size):
-  """Get the n-best logits from a list."""
-  index_and_score = sorted(enumerate(logits), key=lambda x: x[1], reverse=True)
-
-  best_indexes = []
-  for i in range(len(index_and_score)):
-    if i >= n_best_size:
-      break
-    best_indexes.append(index_and_score[i][0])
-  return best_indexes
-
-
-def _compute_softmax(scores):
-  """Compute softmax probability over raw logits."""
-  if not scores:
-    return []
-
-  max_score = None
-  for score in scores:
-    if max_score is None or score > max_score:
-      max_score = score
-
-  exp_scores = []
-  total_sum = 0.0
-  for score in scores:
-    x = math.exp(score - max_score)
-    exp_scores.append(x)
-    total_sum += x
-
-  probs = []
-  for score in exp_scores:
-    probs.append(score / total_sum)
-  return probs
-
+  tf.logging.info("***** Write prediction compelete *****")
 
 class FeatureWriter(object):
   """Writes InputFeature to TF example file."""
@@ -1046,7 +807,7 @@ class FeatureWriter(object):
       features["phrase_context_input_mask"] = create_int_feature(feature.phrase_context_input_mask)
       features["phrase_context_segment_ids"] = create_int_feature(feature.phrase_context_segment_ids)
 
-    if FLAGS.inpu_type == "question" or FLAGS.input_type == "train":
+    if FLAGS.input_type == "question" or FLAGS.input_type == "train":
       features["question_input_ids"] = create_int_feature(feature.question_input_ids)
       features["question_input_mask"] = create_int_feature(feature.question_input_mask)
       features["question_segment_ids"] = create_int_feature(feature.question_segment_ids)
@@ -1119,8 +880,7 @@ def main(_):
   if FLAGS.do_train:
     train_examples = read_squad_examples(
         input_file=FLAGS.train_file, is_training=True)
-    num_train_steps = int(
-        len(train_examples) / FLAGS.train_batch_size * FLAGS.num_train_epochs)
+    num_train_steps = int(len(train_examples) / FLAGS.train_batch_size * FLAGS.num_train_epochs)
     num_warmup_steps = int(num_train_steps * FLAGS.warmup_proportion)
 
     # Pre-shuffle the input to avoid having to make a very large shuffle
@@ -1169,7 +929,8 @@ def main(_):
 
     train_input_fn = input_fn_builder(
         input_file=train_writer.filename,
-        seq_length=FLAGS.max_seq_length,
+        phrase_context_seq_length = FLAGS.max_phrase_context_seq_length,
+        question_seq_length = FLAGS.max_question_seq_length,
         is_training=True,
         drop_remainder=True)
     estimator.train(input_fn=train_input_fn, max_steps=num_train_steps)
@@ -1203,17 +964,15 @@ def main(_):
             append_feature(dummy)
 
     eval_writer.close()
-
     tf.logging.info("***** Running predictions *****")
     tf.logging.info("  Num orig examples = %d", len(eval_examples))
     tf.logging.info("  Num split examples = %d", len(eval_features))
     tf.logging.info("  Batch size = %d", FLAGS.predict_batch_size)
 
-    all_results = []
-
     predict_input_fn = input_fn_builder(
         input_file=eval_writer.filename,
-        seq_length=FLAGS.max_seq_length,
+        phrase_context_seq_length=FLAGS.max_phrase_context_seq_length,
+        question_seq_length=FLAGS.max_question_seq_length,
         is_training=False,
         drop_remainder=False)
 
@@ -1225,23 +984,24 @@ def main(_):
       if len(all_results) % 1000 == 0:
         tf.logging.info("Processing example: %d" % (len(all_results)))
       unique_id = int(result["unique_ids"])
-      start_logits = [float(x) for x in result["start_logits"].flat]
-      end_logits = [float(x) for x in result["end_logits"].flat]
+      phrase_embedding = None
+      question_embedding = None
+      if FLAGS.input_type == "context" or FLAGS.input_type == "train":
+          phrase_embedding = result["phrase_embeddings"]
+      if FLAGS.input_type == "question" or FLAGS.input_type == "train":
+          question_embedding = result["question_embeddings"]
       all_results.append(
           RawResult(
               unique_id=unique_id,
-              start_logits=start_logits,
-              end_logits=end_logits))
+              phrase_embedding=phrase_embedding,
+              question_embedding=question_embedding))
 
-    output_prediction_file = os.path.join(FLAGS.output_dir, "predictions.json")
-    output_nbest_file = os.path.join(FLAGS.output_dir, "nbest_predictions.json")
-    output_null_log_odds_file = os.path.join(FLAGS.output_dir, "null_odds.json")
+    output_context_dir = os.path.join(FLAGS.output_dir, "context_emb")
+    output_question_dir = os.path.join(FLAGS.output_dir, "question_emb")
+    tf.gfile.MakeDirs(output_context_dir)
+    tf.gfile.MakeDirs(output_question_dir)
 
-    write_predictions(eval_examples, eval_features, all_results,
-                      FLAGS.n_best_size, FLAGS.max_answer_length,
-                      FLAGS.do_lower_case, output_prediction_file,
-                      output_nbest_file, output_null_log_odds_file)
-
+    write_predictions_piqa(eval_features, all_results, output_context_dir, output_question_dir)
 
 if __name__ == "__main__":
   print("Current options : ", tf.app.flags.FLAGS.flag_values_dict())
