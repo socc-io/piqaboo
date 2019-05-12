@@ -675,7 +675,7 @@ def input_fn_builder(input_file, phrase_context_seq_length, question_seq_length,
     name_to_features["question_segment_ids"] = tf.FixedLenFeature([question_seq_length], tf.int64)  
 
   if is_training:
-    name_to_features["label_sim"] = tf.FixedLenFeature([], tf.int64)
+    name_to_features["label_sim"] = tf.FixedLenFeature([], tf.float)
 
   def _decode_record(record, name_to_features):
     """Decodes a record to a TensorFlow example."""
@@ -812,6 +812,10 @@ class FeatureWriter(object):
           int64_list=tf.train.Int64List(value=list(values)))
       return feature
 
+    def create_float_feature(values):
+      feature = tf.train.Feature(float_list=tf.train.FloatList(value=list(values)))
+      return feature
+
     features = collections.OrderedDict()
     features["unique_ids"] = create_int_feature([feature.unique_id])
 
@@ -826,7 +830,7 @@ class FeatureWriter(object):
       features["question_segment_ids"] = create_int_feature(feature.question_segment_ids)
 
     if self.is_training:
-      features["label_sim"] = create_int_feature([feature.label_sim])
+      features["label_sim"] = create_float_feature([feature.label_sim])
 
     tf_example = tf.train.Example(features=tf.train.Features(feature=features))
     self._writer.write(tf_example.SerializeToString())
