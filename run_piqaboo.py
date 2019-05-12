@@ -207,19 +207,6 @@ class SquadExample(object):
 class InputFeatures(object):
   """A single set of features of data."""
 
-  unique_id = unique_id,
-  example_index = example_index,
-  doc_span_index = doc_span_index,
-  tokens = phrase_context_tokens,
-  token_is_max_context = token_is_max_context,
-  phrase_context_input_ids = phrase_context_input_ids,
-  phrase_context_input_mask = phrase_context_input_mask,
-  phrase_context_segment_ids = phrase_context_segment_ids,
-  question_input_ids = question_input_ids,
-  question_input_mask = question_input_mask,
-  question_segment_ids = question_segment_ids,
-  label_sim = label_sim
-
   def __init__(self,
                unique_id,
                example_index,
