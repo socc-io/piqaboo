@@ -342,112 +342,123 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
 
 
     # phrase + doc 인풋
-    all_doc_tokens = tokenizer.tokenize(example.doc_tokens)
-    phrase_tokens = tokenizer.tokenize(example.phrase_text)
+    for i, token in enumerate(example.doc_tokens) :
+        # 문서의 모든 토큰에 대해 케이스를 만듬.
+        for window_size in range(max_answer_length):
+            # 현재 토큰에 대해서 윈도우 사이즈별로 케이스를 만든다. 정답인 경우에만 label_sim=1 이다
+            start_idx = i
+            end_idx = i + window_size
+            label_sim = 0.0
+            if start_idx == example.start_position and end_idx == example.end_position:
+                label_sim = 1.0
 
-    # The -3 accounts for [CLS], [SEP] and [SEP]
-    max_tokens_for_doc = max_doc_phrase_input_length - len(phrase_tokens) - 3
+            phrase_tokens = tokenizer.tokenize(example.doc_tokens[start_idx:(end_idx+1)]);
+            all_doc_tokens = tokenizer.tokenize(example.doc_tokens)
 
-
-    # We can have documents that are longer than the maximum sequence length.
-    # To deal with this we do a sliding window approach, where we take chunks
-    # of the up to our max length with a stride of `doc_stride`.
-    _DocSpan = collections.namedtuple(  # pylint: disable=invalid-name
-        "DocSpan", ["start", "length"])
-    doc_spans = []
-    start_offset = 0
-    while start_offset < len(all_doc_tokens):
-      length = len(all_doc_tokens) - start_offset
-      if length > max_tokens_for_doc:
-        length = max_tokens_for_doc
-      doc_spans.append(_DocSpan(start=start_offset, length=length))
-      if start_offset + length == len(all_doc_tokens):
-        break
-      start_offset += min(length, doc_stride)
-
-    for (doc_span_index, doc_span) in enumerate(doc_spans):
-      phrase_context_tokens = []
-      token_is_max_context = {}
-      phrase_context_segment_ids = []
-      phrase_context_tokens.append("[CLS]")
-      phrase_context_segment_ids.append(0)
-      for token in phrase_tokens:
-        phrase_context_tokens.append(token)
-        phrase_context_segment_ids.append(0)
-      phrase_context_tokens.append("[SEP]")
-      phrase_context_segment_ids.append(0)
-
-      for i in range(doc_span.length):
-        split_token_index = doc_span.start + i
-
-        is_max_context = _check_is_max_context(doc_spans, doc_span_index,
-                                               split_token_index)
-        token_is_max_context[len(phrase_context_tokens)] = is_max_context
-        phrase_context_tokens.append(all_doc_tokens[split_token_index])
-        phrase_context_segment_ids.append(1)
-      phrase_context_tokens.append("[SEP]")
-      phrase_context_segment_ids.append(1)
-
-      phrase_context_input_ids = tokenizer.convert_tokens_to_ids(phrase_context_tokens)
-
-      # The mask has 1 for real tokens and 0 for padding tokens. Only real
-      # tokens are attended to.
-      phrase_context_input_mask = [1] * len(phrase_context_input_ids)
-
-      # Zero-pad up to the sequence length.
-      while len(phrase_context_input_ids) < max_doc_phrase_input_length:
-        phrase_context_input_ids.append(0)
-        phrase_context_input_mask.append(0)
-        phrase_context_segment_ids.append(0)
-
-      assert len(phrase_context_input_ids) == max_doc_phrase_input_length
-      assert len(phrase_context_input_mask) == max_doc_phrase_input_length
-      assert len(phrase_context_segment_ids) == max_doc_phrase_input_length
+            # The -3 accounts for [CLS], [SEP] and [SEP]
+            max_tokens_for_doc = max_doc_phrase_input_length - len(phrase_tokens) - 3
 
 
-      if example_index < 3 and FLAGS.debug:
-        tf.logging.info("*** Example ***")
-        tf.logging.info("unique_id: %s" % (unique_id))
-        tf.logging.info("example_index: %s" % (example_index))
-        tf.logging.info("question_tokens: %s" % " ".join(
-            [tokenization.printable_text(x) for x in question_tokens]))
-        tf.logging.info("question_input_ids: %s" % " ".join([str(x) for x in question_input_ids]))
-        tf.logging.info(
-            "question_input_mask: %s" % " ".join([str(x) for x in question_input_mask]))
-        tf.logging.info(
-            "question_segment_ids: %s" % " ".join([str(x) for x in question_segment_ids]))
-        tf.logging.info("doc_span_index: %s" % (doc_span_index))
-        tf.logging.info("phrase_context_tokens: %s" % " ".join(
-            [tokenization.printable_text(x) for x in phrase_context_tokens]))
-        tf.logging.info("token_is_max_context: %s" % " ".join([
-            "%d:%s" % (x, y) for (x, y) in six.iteritems(token_is_max_context)
-        ]))
-        tf.logging.info("phrase_context_input_ids: %s" % " ".join([str(x) for x in phrase_context_input_ids]))
-        tf.logging.info(
-            "phrase_context_input_mask: %s" % " ".join([str(x) for x in phrase_context_input_mask]))
-        tf.logging.info(
-            "phrase_context_segment_ids: %s" % " ".join([str(x) for x in phrase_context_segment_ids]))
-        if is_training and example.is_impossible:
-          tf.logging.info("impossible example")
+            # We can have documents that are longer than the maximum sequence length.
+            # To deal with this we do a sliding window approach, where we take chunks
+            # of the up to our max length with a stride of `doc_stride`.
+            _DocSpan = collections.namedtuple(  # pylint: disable=invalid-name
+                "DocSpan", ["start", "length"])
+            doc_spans = []
+            start_offset = 0
+            while start_offset < len(all_doc_tokens):
+              length = len(all_doc_tokens) - start_offset
+              if length > max_tokens_for_doc:
+                length = max_tokens_for_doc
+              doc_spans.append(_DocSpan(start=start_offset, length=length))
+              if start_offset + length == len(all_doc_tokens):
+                break
+              start_offset += min(length, doc_stride)
 
-      feature = InputFeatures(
-          unique_id=unique_id,
-          example_index=example_index,
-          doc_span_index=doc_span_index,
-          tokens=phrase_context_tokens,
-          token_is_max_context=token_is_max_context,
-          phrase_context_input_ids=phrase_context_input_ids,
-          phrase_context_input_mask=phrase_context_input_mask,
-          phrase_context_segment_ids=phrase_context_segment_ids,
-          question_input_ids=question_input_ids,
-          question_input_mask=question_input_mask,
-          question_segment_ids=question_segment_ids
-      )
+            for (doc_span_index, doc_span) in enumerate(doc_spans):
+              phrase_context_tokens = []
+              token_is_max_context = {}
+              phrase_context_segment_ids = []
+              phrase_context_tokens.append("[CLS]")
+              phrase_context_segment_ids.append(0)
+              for token in phrase_tokens:
+                phrase_context_tokens.append(token)
+                phrase_context_segment_ids.append(0)
+              phrase_context_tokens.append("[SEP]")
+              phrase_context_segment_ids.append(0)
 
-      # Run callback
-      output_fn(feature)
+              for i in range(doc_span.length):
+                split_token_index = doc_span.start + i
 
-      unique_id += 1
+                is_max_context = _check_is_max_context(doc_spans, doc_span_index,
+                                                       split_token_index)
+                token_is_max_context[len(phrase_context_tokens)] = is_max_context
+                phrase_context_tokens.append(all_doc_tokens[split_token_index])
+                phrase_context_segment_ids.append(1)
+              phrase_context_tokens.append("[SEP]")
+              phrase_context_segment_ids.append(1)
+
+              phrase_context_input_ids = tokenizer.convert_tokens_to_ids(phrase_context_tokens)
+
+              # The mask has 1 for real tokens and 0 for padding tokens. Only real
+              # tokens are attended to.
+              phrase_context_input_mask = [1] * len(phrase_context_input_ids)
+
+              # Zero-pad up to the sequence length.
+              while len(phrase_context_input_ids) < max_doc_phrase_input_length:
+                phrase_context_input_ids.append(0)
+                phrase_context_input_mask.append(0)
+                phrase_context_segment_ids.append(0)
+
+              assert len(phrase_context_input_ids) == max_doc_phrase_input_length
+              assert len(phrase_context_input_mask) == max_doc_phrase_input_length
+              assert len(phrase_context_segment_ids) == max_doc_phrase_input_length
+
+
+              if example_index < 3 and label_sim==1.0 and FLAGS.debug:
+                tf.logging.info("*** Example ***")
+                tf.logging.info("unique_id: %s" % (unique_id))
+                tf.logging.info("example_index: %s" % (example_index))
+                tf.logging.info("question_tokens: %s" % " ".join(
+                    [tokenization.printable_text(x) for x in question_tokens]))
+                tf.logging.info("question_input_ids: %s" % " ".join([str(x) for x in question_input_ids]))
+                tf.logging.info(
+                    "question_input_mask: %s" % " ".join([str(x) for x in question_input_mask]))
+                tf.logging.info(
+                    "question_segment_ids: %s" % " ".join([str(x) for x in question_segment_ids]))
+                tf.logging.info("doc_span_index: %s" % (doc_span_index))
+                tf.logging.info("phrase_context_tokens: %s" % " ".join(
+                    [tokenization.printable_text(x) for x in phrase_context_tokens]))
+                tf.logging.info("token_is_max_context: %s" % " ".join([
+                    "%d:%s" % (x, y) for (x, y) in six.iteritems(token_is_max_context)
+                ]))
+                tf.logging.info("phrase_context_input_ids: %s" % " ".join([str(x) for x in phrase_context_input_ids]))
+                tf.logging.info(
+                    "phrase_context_input_mask: %s" % " ".join([str(x) for x in phrase_context_input_mask]))
+                tf.logging.info(
+                    "phrase_context_segment_ids: %s" % " ".join([str(x) for x in phrase_context_segment_ids]))
+                if is_training and example.is_impossible:
+                  tf.logging.info("impossible example")
+
+              feature = InputFeatures(
+                  unique_id=unique_id,
+                  example_index=example_index,
+                  doc_span_index=doc_span_index,
+                  tokens=phrase_context_tokens,
+                  token_is_max_context=token_is_max_context,
+                  phrase_context_input_ids=phrase_context_input_ids,
+                  phrase_context_input_mask=phrase_context_input_mask,
+                  phrase_context_segment_ids=phrase_context_segment_ids,
+                  question_input_ids=question_input_ids,
+                  question_input_mask=question_input_mask,
+                  question_segment_ids=question_segment_ids,
+                  label_sim=label_sim
+              )
+
+              # Run callback
+              output_fn(feature)
+
+              unique_id += 1
 
 
 def _improve_answer_span(doc_tokens, input_start, input_end, tokenizer,
