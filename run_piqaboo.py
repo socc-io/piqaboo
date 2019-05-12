@@ -536,10 +536,10 @@ def _check_is_max_context(doc_spans, cur_span_index, position):
 
 
 def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
-                 use_one_hot_embeddings):
+                 use_one_hot_embeddings, scope):
   """Creates a classification model."""
 
-  with tf.variable_scope('bert', reuse=tf.AUTO_REUSE) as scope:
+  with tf.variable_scope('bert', reuse=tf.AUTO_REUSE) as real_scope:
     model = modeling.BertModel(
       config=bert_config,
       is_training=is_training,
@@ -551,12 +551,7 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
     )
 
   final_hidden = model.get_sequence_output()
-
   final_hidden_shape = modeling.get_shape_list(final_hidden, expected_rank=3)
-  batch_size = final_hidden_shape[0]
-  seq_length = final_hidden_shape[1]
-  hidden_size = final_hidden_shape[2]
-  
   return final_hidden[:,0,:]
 
 def model_fn_builder(bert_config, init_checkpoint, learning_rate,
@@ -589,31 +584,39 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
       label_sim = features["label_sim"]
 
     if FLAGS.input_type == "context" or FLAGS.input_type == "train":
-      phrase_embedding = create_model(
-            bert_config=bert_config,
-            is_training=is_training,
-            input_ids=phrase_context_input_ids,
-            input_mask=phrase_context_input_mask,
-            segment_ids=phrase_context_segment_ids,
-            use_one_hot_embeddings=use_one_hot_embeddings)
-      norm_pe = tf.nn.l2_normalize(phrase_embedding)
+      with tf.variable_scope('context', reuse=tf.AUTO_REUSE) as scope:
+        phrase_embedding = create_model(
+              bert_config=bert_config,
+              is_training=is_training,
+              input_ids=phrase_context_input_ids,
+              input_mask=phrase_context_input_mask,
+              segment_ids=phrase_context_segment_ids,
+              use_one_hot_embeddings=use_one_hot_embeddings)
+        norm_pe = tf.nn.l2_normalize(phrase_embedding)
 
     if FLAGS.input_type == "question" or FLAGS.input_type == "train":
-      question_embedding = create_model(
-            bert_config=bert_config,
-            is_training=is_training,
-            input_ids=question_input_ids,
-            input_mask=question_input_mask,
-            segment_ids=question_segment_ids,
-            use_one_hot_embeddings=use_one_hot_embeddings)
+      with tf.variable_scope('question', reuse=tf.AUTO_REUSE) as scope:
+        question_embedding = create_model(
+              bert_config=bert_config,
+              is_training=is_training,
+              input_ids=question_input_ids,
+              input_mask=question_input_mask,
+              segment_ids=question_segment_ids,
+              use_one_hot_embeddings=use_one_hot_embeddings)
       norm_qe = tf.nn.l2_normalize(question_embedding)
 
     tvars = tf.trainable_variables()
     initialized_variable_names = {}
     scaffold_fn = None
     if init_checkpoint:
-      (assignment_map, initialized_variable_names
-      ) = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
+      (assignment_map, init_var) \
+        = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint, "context/")
+      initialized_variable_names.update(init_var)
+      tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
+
+      (assignment_map, init_var) \
+        = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint, "question/")
+      initialized_variable_names.update(init_var)
       tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
 
     tf.logging.info("**** Trainable Variables ****")
