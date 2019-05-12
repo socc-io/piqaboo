@@ -331,7 +331,7 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
 
     question_input_ids = tokenizer.convert_tokens_to_ids(question_tokens)
     question_input_mask = [1] * len(question_input_ids)
-    while len(question_input_ids) < max_doc_phrase_input_length:
+    while len(question_input_ids) < max_question_input_length:
         question_input_ids.append(0)
         question_input_mask.append(0)
 
@@ -587,7 +587,8 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
               input_ids=phrase_context_input_ids,
               input_mask=phrase_context_input_mask,
               segment_ids=phrase_context_segment_ids,
-              use_one_hot_embeddings=use_one_hot_embeddings)
+              use_one_hot_embeddings=use_one_hot_embeddings,
+              scope=scope)
         norm_pe = tf.nn.l2_normalize(phrase_embedding)
 
     if FLAGS.input_type == "question" or FLAGS.input_type == "train":
@@ -598,7 +599,8 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
               input_ids=question_input_ids,
               input_mask=question_input_mask,
               segment_ids=question_segment_ids,
-              use_one_hot_embeddings=use_one_hot_embeddings)
+              use_one_hot_embeddings=use_one_hot_embeddings,
+              scope=scope)
       norm_qe = tf.nn.l2_normalize(question_embedding)
 
     tvars = tf.trainable_variables()
@@ -627,7 +629,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     if mode == tf.estimator.ModeKeys.TRAIN:
       similarity = tf.reduce_sum(norm_pe * norm_qe, axis=1)
       similarity_scaled = (similarity - 0.5) * 32
-      loss_sim = tf.nn.sigmoid_cross_entropy_with_logits(logits=similarity_scaled, label=label_sim)
+      loss_sim = tf.nn.sigmoid_cross_entropy_with_logits(logits=similarity_scaled, labels=label_sim)
       total_loss = tf.reduce_sum(loss_sim)
 
       global_step = tf.train.get_or_create_global_step()
@@ -666,13 +668,13 @@ def input_fn_builder(input_file, phrase_context_seq_length, question_seq_length,
     name_to_features["phrase_context_input_mask"] = tf.FixedLenFeature([phrase_context_seq_length], tf.int64)
     name_to_features["phrase_context_segment_ids"] = tf.FixedLenFeature([phrase_context_seq_length], tf.int64)
 
-  if FLAGS.input_type == "question" or FLAGS.input_type == "train:":
+  if FLAGS.input_type == "question" or FLAGS.input_type == "train":
     name_to_features["question_input_ids"] = tf.FixedLenFeature([question_seq_length], tf.int64)
     name_to_features["question_input_mask"] = tf.FixedLenFeature([question_seq_length], tf.int64)
     name_to_features["question_segment_ids"] = tf.FixedLenFeature([question_seq_length], tf.int64)  
 
   if is_training:
-    name_to_features["label_sim"] = tf.FixedLenFeature([], tf.float)
+    name_to_features["label_sim"] = tf.FixedLenFeature([], tf.float32)
 
   def _decode_record(record, name_to_features):
     """Decodes a record to a TensorFlow example."""
@@ -853,16 +855,16 @@ def validate_flags_or_throw(bert_config):
       raise ValueError(
           "If `do_predict` is True, then `predict_file` must be specified.")
 
-  if FLAGS.max_seq_length > bert_config.max_position_embeddings:
+  if FLAGS.max_phrase_context_seq_length > bert_config.max_position_embeddings:
     raise ValueError(
         "Cannot use sequence length %d because the BERT model "
         "was only trained up to sequence length %d" %
-        (FLAGS.max_seq_length, bert_config.max_position_embeddings))
+        (FLAGS.max_phrase_context_seq_length, bert_config.max_position_embeddings))
 
-  if FLAGS.max_seq_length <= FLAGS.max_query_length + 3:
+  if FLAGS.max_phrase_context_seq_length <= FLAGS.max_question_seq_length + 3:
     raise ValueError(
-        "The max_seq_length (%d) must be greater than max_query_length "
-        "(%d) + 3" % (FLAGS.max_seq_length, FLAGS.max_query_length))
+        "The max_phrase_context_seq_length (%d) must be greater than max_question_seq_length "
+        "(%d) + 3" % (FLAGS.max_phrase_context_seq_length, FLAGS.max_question_seq_length))
 
   ngpu = len(os.getenv('CUDA_VISIBLE_DEVICES', '0').split(','))
 
@@ -965,9 +967,9 @@ def main(_):
     convert_examples_to_features(
         examples=eval_examples,
         tokenizer=tokenizer,
-        max_doc_phrase_input_length=FLAGS.max_seq_length,
+        max_doc_phrase_input_length=FLAGS.max_phrase_context_seq_length,
         doc_stride=FLAGS.doc_stride,
-        max_question_input_length=FLAGS.max_query_length,
+        max_question_input_length=FLAGS.max_question_seq_length,
         is_training=False,
         output_fn=append_feature)
 
