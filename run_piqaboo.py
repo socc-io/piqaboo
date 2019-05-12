@@ -29,6 +29,7 @@ import tokenization
 import six
 import tensorflow as tf
 import numpy as np
+from tqdm import tqdm
 
 flags = tf.flags
 
@@ -273,9 +274,6 @@ def read_squad_examples(input_file, is_training):
 
           if FLAGS.version_2_with_negative:
             is_impossible = qa["is_impossible"]
-          if (len(qa["answers"]) != 1) and (not is_impossible):
-            raise ValueError(
-                "For training, each question should have exactly 1 answer.")
           if not is_impossible:
             answer = qa["answers"][0]
             orig_answer_text = answer["text"]
@@ -323,7 +321,7 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
 
   unique_id = 1000000000
 
-  for (example_index, example) in enumerate(examples):
+  for (example_index, example) in enumerate(tqdm(examples)):
 
     # question 인풋
     question_tokens = ["[CLS]"]
@@ -339,7 +337,7 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
         question_input_mask.append(0)
 
     question_segment_ids = [0] * max_question_input_length
-    max_answer_length = 6
+    max_answer_length = 2
     # phrase + doc 인풋
     for i, token in enumerate(example.doc_tokens) :
         # 문서의 모든 토큰에 대해 케이스를 만듬.
