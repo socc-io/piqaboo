@@ -66,18 +66,17 @@ flags.DEFINE_bool(
     "models and False for cased models.")
 
 flags.DEFINE_integer(
-    "max_seq_length", 384,
-    "The maximum total input sequence length after WordPiece tokenization. "
-    "Sequences longer than this will be truncated, and sequences shorter "
-    "than this will be padded.")
-
-flags.DEFINE_integer(
     "doc_stride", 128,
     "When splitting up a long document into chunks, how much stride to "
     "take between chunks.")
 
 flags.DEFINE_integer(
-    "max_query_length", 64,
+    "max_phrase_context_seq_length", 384,
+    "The maximum number of tokens for the question. Questions longer than "
+    "this will be truncated to this length.")
+
+flags.DEFINE_integer(
+    "max_question_seq_length", 64,
     "The maximum number of tokens for the question. Questions longer than "
     "this will be truncated to this length.")
 
@@ -928,9 +927,9 @@ def main(_):
     convert_examples_to_features(
         examples=train_examples,
         tokenizer=tokenizer,
-        max_doc_phrase_input_length=FLAGS.max_seq_length,
+        max_doc_phrase_input_length=FLAGS.max_phrase_context_seq_length,
         doc_stride=FLAGS.doc_stride,
-        max_question_input_length=FLAGS.max_query_length,
+        max_question_input_length=FLAGS.max_question_seq_length,
         is_training=True,
         output_fn=train_writer.process_feature)
     train_writer.close()
