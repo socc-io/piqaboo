@@ -207,31 +207,44 @@ class SquadExample(object):
 class InputFeatures(object):
   """A single set of features of data."""
 
+  unique_id = unique_id,
+  example_index = example_index,
+  doc_span_index = doc_span_index,
+  tokens = phrase_context_tokens,
+  token_is_max_context = token_is_max_context,
+  phrase_context_input_ids = phrase_context_input_ids,
+  phrase_context_input_mask = phrase_context_input_mask,
+  phrase_context_segment_ids = phrase_context_segment_ids,
+  question_input_ids = question_input_ids,
+  question_input_mask = question_input_mask,
+  question_segment_ids = question_segment_ids,
+  label_sim = label_sim
+
   def __init__(self,
                unique_id,
                example_index,
                doc_span_index,
                tokens,
-               token_to_orig_map,
                token_is_max_context,
-               input_ids,
-               input_mask,
-               segment_ids,
-               start_position=None,
-               end_position=None,
-               is_impossible=None):
+               phrase_context_input_ids,
+               phrase_context_input_mask,
+               phrase_context_segment_ids,
+               question_input_ids,
+               question_input_mask,
+               question_segment_ids,
+               label_sim):
     self.unique_id = unique_id
     self.example_index = example_index
     self.doc_span_index = doc_span_index
     self.tokens = tokens
-    self.token_to_orig_map = token_to_orig_map
     self.token_is_max_context = token_is_max_context
-    self.input_ids = input_ids
-    self.input_mask = input_mask
-    self.segment_ids = segment_ids
-    self.start_position = start_position
-    self.end_position = end_position
-    self.is_impossible = is_impossible
+    self.phrase_context_input_ids = phrase_context_input_ids
+    self.phrase_context_input_mask = phrase_context_input_mask
+    self.phrase_context_segment_ids = phrase_context_segment_ids
+    self.question_input_ids = question_input_ids
+    self.question_input_mask = question_input_mask
+    self.question_segment_ids = question_segment_ids
+    self.label_sim = label_sim
 
 
 def read_squad_examples(input_file, is_training):
