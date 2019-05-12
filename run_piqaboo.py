@@ -339,8 +339,7 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
         question_input_mask.append(0)
 
     question_segment_ids = [0] * max_question_input_length
-
-
+    max_answer_length = 6
     # phrase + doc 인풋
     for i, token in enumerate(example.doc_tokens) :
         # 문서의 모든 토큰에 대해 케이스를 만듬.
@@ -352,8 +351,8 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
             if start_idx == example.start_position and end_idx == example.end_position:
                 label_sim = 1.0
 
-            phrase_tokens = tokenizer.tokenize(example.doc_tokens[start_idx:(end_idx+1)]);
-            all_doc_tokens = tokenizer.tokenize(example.doc_tokens)
+            phrase_tokens = tokenizer.tokenize(" ".join(example.doc_tokens[start_idx:(end_idx+1)]));
+            all_doc_tokens = tokenizer.tokenize(" ".join(example.doc_tokens))
 
             # The -3 accounts for [CLS], [SEP] and [SEP]
             max_tokens_for_doc = max_doc_phrase_input_length - len(phrase_tokens) - 3
