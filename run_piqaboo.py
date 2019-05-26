@@ -172,6 +172,8 @@ class SquadExample(object):
 
   def __init__(self,
                qas_id,
+               article_title,
+               para_idx,
                question_text,
                doc_tokens,
                orig_answer_text=None,
@@ -179,6 +181,8 @@ class SquadExample(object):
                end_position=None,
                is_impossible=False):
     self.qas_id = qas_id
+    self.article_title = article_title
+    self.para_idx = para_idx
     self.question_text = question_text
     self.doc_tokens = doc_tokens
     self.orig_answer_text = orig_answer_text
@@ -209,6 +213,10 @@ class InputFeatures(object):
 
   def __init__(self,
                unique_id,
+               article_title,
+               para_idx,
+               qid,
+               phrase_text,
                example_index,
                doc_span_index,
                tokens,
@@ -221,6 +229,10 @@ class InputFeatures(object):
                question_segment_ids,
                label_sim):
     self.unique_id = unique_id
+    self.article_title = article_title
+    self.para_idx = para_idx
+    self.qid = qid
+    self.phrase_text = phrase_text
     self.example_index = example_index
     self.doc_span_index = doc_span_index
     self.tokens = tokens
@@ -246,8 +258,10 @@ def read_squad_examples(input_file, is_training):
 
   examples = []
   for entry in input_data:
-    for paragraph in entry["paragraphs"]:
+    article_title = entry["title"]
+    for idx, paragraph in enumerate(entry["paragraphs"]):
       paragraph_text = paragraph["context"]
+      para_idx = idx
       doc_tokens = []
       char_to_word_offset = []
       prev_is_whitespace = True
@@ -302,6 +316,8 @@ def read_squad_examples(input_file, is_training):
 
         example = SquadExample(
             qas_id=qas_id,
+            article_title=article_title,
+            para_idx= idx,
             question_text=question_text,
             doc_tokens=doc_tokens,
             orig_answer_text=orig_answer_text,
@@ -321,7 +337,9 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
   unique_id = 1000000000
 
   for (example_index, example) in enumerate(tqdm(examples)):
-
+    article_title = example.article_title
+    para_idx = example.para_idx
+    qid = example.qas_id
     # question 인풋
     question_tokens = ["[CLS]"]
     question_tokens.extend(tokenizer.tokenize(example.question_text))
@@ -348,12 +366,12 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
             if start_idx == example.start_position and end_idx == example.end_position:
                 label_sim = 1.0
 
+            phrase_text = " ".join(example.doc_tokens[start_idx:(end_idx+1)])
             phrase_tokens = tokenizer.tokenize(" ".join(example.doc_tokens[start_idx:(end_idx+1)]));
             all_doc_tokens = tokenizer.tokenize(" ".join(example.doc_tokens))
 
             # The -3 accounts for [CLS], [SEP] and [SEP]
             max_tokens_for_doc = max_doc_phrase_input_length - len(phrase_tokens) - 3
-
 
             # We can have documents that are longer than the maximum sequence length.
             # To deal with this we do a sliding window approach, where we take chunks
@@ -438,6 +456,10 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
 
               feature = InputFeatures(
                   unique_id=unique_id,
+                  article_title=article_title,
+                  qid=qid,
+                  para_idx=para_idx,
+                  phrase_text = phrase_text,
                   example_index=example_index,
                   doc_span_index=doc_span_index,
                   tokens=phrase_context_tokens,
@@ -748,12 +770,11 @@ def write_predictions_piqa(all_features, all_results, output_context_dir, output
   all_question_embedding = {}
 
   for (feature_index, feature) in enumerate(all_features):
-    article_title = feature.article_title
-    para_idx = str(feature.para_idx)
-    phrase_text = feature.phrase_text
-    qid = feature.qid
-    result_entry = unique_id_to_result[feature.result.unique_id]
+    result_entry = unique_id_to_result[feature.unique_id]
     if FLAGS.input_type == "context" or FLAGS.input_type == "train":
+      article_title = feature.article_title
+      para_idx = str(feature.para_idx)
+      phrase_text = feature.phrase_text
       phrase_embedding = result_entry.phrase_embedding
       context_embedding_entry = all_context_embedding.get(article_title, {})
       paragraph_entry = context_embedding_entry.get(para_idx, [])
@@ -765,6 +786,7 @@ def write_predictions_piqa(all_features, all_results, output_context_dir, output
       all_context_embedding[article_title] = context_embedding_entry
 
     if FLAGS.inpu_type == "question" or FLAGS.input_type == "train":
+      qid = feature.qid
       question_embedding = result_entry.question_embedding
       all_question_embedding[qid] = list(question_embedding)
 
