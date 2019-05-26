@@ -223,9 +223,7 @@ class InputFeatures(object):
                qid,
                phrase_text,
                example_index,
-               doc_span_index,
                tokens,
-               token_is_max_context,
                phrase_context_input_ids,
                phrase_context_input_mask,
                phrase_context_segment_ids,
@@ -239,9 +237,7 @@ class InputFeatures(object):
     self.qid = qid
     self.phrase_text = phrase_text
     self.example_index = example_index
-    self.doc_span_index = doc_span_index
     self.tokens = tokens
-    self.token_is_max_context = token_is_max_context
     self.phrase_context_input_ids = phrase_context_input_ids
     self.phrase_context_input_mask = phrase_context_input_mask
     self.phrase_context_segment_ids = phrase_context_segment_ids
@@ -388,8 +384,10 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
 
             # The -3 accounts for [CLS], [SEP] and [SEP]
             max_tokens_for_doc = max_doc_phrase_input_length - len(phrase_tokens) - 3
-            phrase_context_tokens.extend(all_doc_tokens[0:max_tokens_for_doc])
-            phrase_context_segment_ids.extend([1]*max_tokens_for_doc)
+            
+            truncated_all_doc_tokens = all_doc_tokens[0:max_tokens_for_doc]
+            phrase_context_tokens.extend(truncated_all_doc_tokens)
+            phrase_context_segment_ids.extend([1] * len(truncated_all_doc_tokens))
 
             phrase_context_tokens.append("[SEP]")
             phrase_context_segment_ids.append(1)
@@ -422,22 +420,20 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
                     "question_input_mask: %s" % " ".join([str(x) for x in question_input_mask]))
                 tf.logging.info(
                     "question_segment_ids: %s" % " ".join([str(x) for x in question_segment_ids]))
-                tf.logging.info("doc_span_index: %s" % (doc_span_index))
                 tf.logging.info("phrase_context_tokens: %s" % " ".join(
                     [tokenization.printable_text(x) for x in phrase_context_tokens]))
-                tf.logging.info("token_is_max_context: %s" % " ".join([
-                    "%d:%s" % (x, y) for (x, y) in six.iteritems(token_is_max_context)
-                ]))
                 tf.logging.info("phrase_context_input_ids: %s" % " ".join([str(x) for x in phrase_context_input_ids]))
                 tf.logging.info(
                     "phrase_context_input_mask: %s" % " ".join([str(x) for x in phrase_context_input_mask]))
                 tf.logging.info(
                     "phrase_context_segment_ids: %s" % " ".join([str(x) for x in phrase_context_segment_ids]))
-                if is_training and example.is_impossible:
-                  tf.logging.info("impossible example")
 
             feature = InputFeatures(
               unique_id=unique_id,
+              article_title=article_title,
+              qid=qid,
+              para_idx=para_idx,
+              phrase_text=phrase_text,
               example_index=example_index,
               tokens=phrase_context_tokens,
               phrase_context_input_ids=phrase_context_input_ids,
