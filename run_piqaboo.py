@@ -770,6 +770,9 @@ def write_predictions_piqa(all_features, all_results, output_context_dir, output
   all_question_embedding = {}
 
   for (feature_index, feature) in enumerate(all_features):
+    if FLAGS.debug and (not feature.unique_id in unique_id_to_result.keys()):
+      print(str(feature.unique_id) + " not found")
+      continue
     result_entry = unique_id_to_result[feature.unique_id]
     if FLAGS.input_type == "context" or FLAGS.input_type == "train":
       article_title = feature.article_title
@@ -785,7 +788,7 @@ def write_predictions_piqa(all_features, all_results, output_context_dir, output
       context_embedding_entry[para_idx] = paragraph_entry
       all_context_embedding[article_title] = context_embedding_entry
 
-    if FLAGS.inpu_type == "question" or FLAGS.input_type == "train":
+    if FLAGS.input_type == "question" or FLAGS.input_type == "train":
       qid = feature.qid
       question_embedding = result_entry.question_embedding
       all_question_embedding[qid] = list(question_embedding)
@@ -808,7 +811,8 @@ def write_predictions_piqa(all_features, all_results, output_context_dir, output
       with open(filename_json, "w") as fp:
         fp.write(json.dumps(phrase_text_list))
 
-  for qid in all_question_embedding:
+  for qid in all_question_embedding.keys():
+    print(qid)
     question_embedding_np = np.array(all_question_embedding[qid])
     filename_np = os.path.join(output_question_dir, "%s" % (qid))
     np.savez(filename_np, question_embedding_np)
@@ -1021,6 +1025,9 @@ def main(_):
         predict_input_fn, yield_single_examples=True):
       if len(all_results) % 1000 == 0:
         tf.logging.info("Processing example: %d" % (len(all_results)))
+        if FLAGS.debug and len(all_results) >= 2000:
+          break
+        
       unique_id = int(result["unique_ids"])
       phrase_embedding = None
       question_embedding = None

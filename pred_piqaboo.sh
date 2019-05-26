@@ -9,7 +9,7 @@ python run_piqaboo.py \
   --vocab_file=$BERT_DIR/vocab.txt \
   --bert_config_file=$BERT_DIR/bert_config.json \
   --init_checkpoint=$INIT_DIR \
-  --input_type=context \
+  --input_type=question \
   --do_train=False \
   --train_file=$SQUAD_DIR/dev-v1.1.debug.json \
   --do_predict=True \
