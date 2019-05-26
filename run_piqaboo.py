@@ -29,6 +29,7 @@ import tokenization
 import six
 import tensorflow as tf
 import numpy as np
+from tqdm import tqdm
 
 flags = tf.flags
 
@@ -65,18 +66,17 @@ flags.DEFINE_bool(
     "models and False for cased models.")
 
 flags.DEFINE_integer(
-    "max_seq_length", 384,
-    "The maximum total input sequence length after WordPiece tokenization. "
-    "Sequences longer than this will be truncated, and sequences shorter "
-    "than this will be padded.")
-
-flags.DEFINE_integer(
     "doc_stride", 128,
     "When splitting up a long document into chunks, how much stride to "
     "take between chunks.")
 
 flags.DEFINE_integer(
-    "max_query_length", 64,
+    "max_phrase_context_seq_length", 384,
+    "The maximum number of tokens for the question. Questions longer than "
+    "this will be truncated to this length.")
+
+flags.DEFINE_integer(
+    "max_question_seq_length", 64,
     "The maximum number of tokens for the question. Questions longer than "
     "this will be truncated to this length.")
 
@@ -177,6 +177,8 @@ class SquadExample(object):
 
   def __init__(self,
                qas_id,
+               article_title,
+               para_idx,
                question_text,
                doc_tokens,
                orig_answer_text=None,
@@ -184,6 +186,8 @@ class SquadExample(object):
                end_position=None,
                is_impossible=False):
     self.qas_id = qas_id
+    self.article_title = article_title
+    self.para_idx = para_idx
     self.question_text = question_text
     self.doc_tokens = doc_tokens
     self.orig_answer_text = orig_answer_text
@@ -214,6 +218,10 @@ class InputFeatures(object):
 
   def __init__(self,
                unique_id,
+               article_title,
+               para_idx,
+               qid,
+               phrase_text,
                example_index,
                doc_span_index,
                tokens,
@@ -226,6 +234,10 @@ class InputFeatures(object):
                question_segment_ids,
                label_sim):
     self.unique_id = unique_id
+    self.article_title = article_title
+    self.para_idx = para_idx
+    self.qid = qid
+    self.phrase_text = phrase_text
     self.example_index = example_index
     self.doc_span_index = doc_span_index
     self.tokens = tokens
@@ -251,8 +263,10 @@ def read_squad_examples(input_file, is_training):
 
   examples = []
   for entry in input_data:
-    for paragraph in entry["paragraphs"]:
+    article_title = entry["title"]
+    for idx, paragraph in enumerate(entry["paragraphs"]):
       paragraph_text = paragraph["context"]
+      para_idx = idx
       doc_tokens = []
       char_to_word_offset = []
       prev_is_whitespace = True
@@ -278,9 +292,6 @@ def read_squad_examples(input_file, is_training):
 
           if FLAGS.version_2_with_negative:
             is_impossible = qa["is_impossible"]
-          if (len(qa["answers"]) != 1) and (not is_impossible):
-            raise ValueError(
-                "For training, each question should have exactly 1 answer.")
           if not is_impossible:
             answer = qa["answers"][0]
             orig_answer_text = answer["text"]
@@ -310,6 +321,8 @@ def read_squad_examples(input_file, is_training):
 
         example = SquadExample(
             qas_id=qas_id,
+            article_title=article_title,
+            para_idx= idx,
             question_text=question_text,
             doc_tokens=doc_tokens,
             orig_answer_text=orig_answer_text,
@@ -328,8 +341,10 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
 
   unique_id = 1000000000
 
-  for (example_index, example) in enumerate(examples):
-
+  for (example_index, example) in enumerate(tqdm(examples)):
+    article_title = example.article_title
+    para_idx = example.para_idx
+    qid = example.qas_id
     # question 인풋
     question_tokens = ["[CLS]"]
     question_tokens.extend(tokenizer.tokenize(example.question_text))
@@ -339,7 +354,7 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
 
     question_input_ids = tokenizer.convert_tokens_to_ids(question_tokens)
     question_input_mask = [1] * len(question_input_ids)
-    while len(question_input_ids) < max_doc_phrase_input_length:
+    while len(question_input_ids) < max_question_input_length:
         question_input_ids.append(0)
         question_input_mask.append(0)
 
@@ -356,9 +371,9 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
             if example.doc_tokens[start_idx:(end_idx+1)] == answer_tokens:
                 label_sim = 1.0
 
+            phrase_text = " ".join(example.doc_tokens[start_idx:(end_idx+1)])
             phrase_tokens = tokenizer.tokenize(" ".join(example.doc_tokens[start_idx:(end_idx+1)]));
             all_doc_tokens = tokenizer.tokenize(" ".join(example.doc_tokens))
-
 
             phrase_context_tokens = []
             phrase_context_segment_ids = []
@@ -570,7 +585,8 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
               input_ids=phrase_context_input_ids,
               input_mask=phrase_context_input_mask,
               segment_ids=phrase_context_segment_ids,
-              use_one_hot_embeddings=use_one_hot_embeddings)
+              use_one_hot_embeddings=use_one_hot_embeddings,
+              scope=scope)
         norm_pe = tf.nn.l2_normalize(phrase_embedding)
 
     if FLAGS.input_type == "question" or FLAGS.input_type == "train":
@@ -581,7 +597,8 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
               input_ids=question_input_ids,
               input_mask=question_input_mask,
               segment_ids=question_segment_ids,
-              use_one_hot_embeddings=use_one_hot_embeddings)
+              use_one_hot_embeddings=use_one_hot_embeddings,
+              scope=scope)
       norm_qe = tf.nn.l2_normalize(question_embedding)
 
     tvars = tf.trainable_variables()
@@ -610,7 +627,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     if mode == tf.estimator.ModeKeys.TRAIN:
       similarity = tf.reduce_sum(norm_pe * norm_qe, axis=1)
       similarity_scaled = (similarity - 0.5) * 32
-      loss_sim = tf.nn.sigmoid_cross_entropy_with_logits(logits=similarity_scaled, label=label_sim)
+      loss_sim = tf.nn.sigmoid_cross_entropy_with_logits(logits=similarity_scaled, labels=label_sim)
       total_loss = tf.reduce_sum(loss_sim)
 
       global_step = tf.train.get_or_create_global_step()
@@ -649,13 +666,13 @@ def input_fn_builder(input_file, phrase_context_seq_length, question_seq_length,
     name_to_features["phrase_context_input_mask"] = tf.FixedLenFeature([phrase_context_seq_length], tf.int64)
     name_to_features["phrase_context_segment_ids"] = tf.FixedLenFeature([phrase_context_seq_length], tf.int64)
 
-  if FLAGS.input_type == "question" or FLAGS.input_type == "train:":
+  if FLAGS.input_type == "question" or FLAGS.input_type == "train":
     name_to_features["question_input_ids"] = tf.FixedLenFeature([question_seq_length], tf.int64)
     name_to_features["question_input_mask"] = tf.FixedLenFeature([question_seq_length], tf.int64)
     name_to_features["question_segment_ids"] = tf.FixedLenFeature([question_seq_length], tf.int64)  
 
   if is_training:
-    name_to_features["label_sim"] = tf.FixedLenFeature([], tf.int64)
+    name_to_features["label_sim"] = tf.FixedLenFeature([], tf.float32)
 
   def _decode_record(record, name_to_features):
     """Decodes a record to a TensorFlow example."""
@@ -729,12 +746,14 @@ def write_predictions_piqa(all_features, all_results, output_context_dir, output
   all_question_embedding = {}
 
   for (feature_index, feature) in enumerate(all_features):
-    article_title = feature.article_title
-    para_idx = str(feature.para_idx)
-    phrase_text = feature.phrase_text
-    qid = feature.qid
-    result_entry = unique_id_to_result[feature.result.unique_id]
+    if FLAGS.debug and (not feature.unique_id in unique_id_to_result.keys()):
+      print(str(feature.unique_id) + " not found")
+      continue
+    result_entry = unique_id_to_result[feature.unique_id]
     if FLAGS.input_type == "context" or FLAGS.input_type == "train":
+      article_title = feature.article_title
+      para_idx = str(feature.para_idx)
+      phrase_text = feature.phrase_text
       phrase_embedding = result_entry.phrase_embedding
       context_embedding_entry = all_context_embedding.get(article_title, {})
       paragraph_entry = context_embedding_entry.get(para_idx, [])
@@ -745,7 +764,8 @@ def write_predictions_piqa(all_features, all_results, output_context_dir, output
       context_embedding_entry[para_idx] = paragraph_entry
       all_context_embedding[article_title] = context_embedding_entry
 
-    if FLAGS.inpu_type == "question" or FLAGS.input_type == "train":
+    if FLAGS.input_type == "question" or FLAGS.input_type == "train":
+      qid = feature.qid
       question_embedding = result_entry.question_embedding
       all_question_embedding[qid] = list(question_embedding)
 
@@ -767,7 +787,8 @@ def write_predictions_piqa(all_features, all_results, output_context_dir, output
       with open(filename_json, "w") as fp:
         fp.write(json.dumps(phrase_text_list))
 
-  for qid in all_question_embedding:
+  for qid in all_question_embedding.keys():
+    print(qid)
     question_embedding_np = np.array(all_question_embedding[qid])
     filename_np = os.path.join(output_question_dir, "%s" % (qid))
     np.savez(filename_np, question_embedding_np)
@@ -792,6 +813,10 @@ class FeatureWriter(object):
           int64_list=tf.train.Int64List(value=list(values)))
       return feature
 
+    def create_float_feature(values):
+      feature = tf.train.Feature(float_list=tf.train.FloatList(value=list(values)))
+      return feature
+
     features = collections.OrderedDict()
     features["unique_ids"] = create_int_feature([feature.unique_id])
 
@@ -806,7 +831,7 @@ class FeatureWriter(object):
       features["question_segment_ids"] = create_int_feature(feature.question_segment_ids)
 
     if self.is_training:
-      features["label_sim"] = create_int_feature([feature.label_sim])
+      features["label_sim"] = create_float_feature([feature.label_sim])
 
     tf_example = tf.train.Example(features=tf.train.Features(feature=features))
     self._writer.write(tf_example.SerializeToString())
@@ -832,16 +857,16 @@ def validate_flags_or_throw(bert_config):
       raise ValueError(
           "If `do_predict` is True, then `predict_file` must be specified.")
 
-  if FLAGS.max_seq_length > bert_config.max_position_embeddings:
+  if FLAGS.max_phrase_context_seq_length > bert_config.max_position_embeddings:
     raise ValueError(
         "Cannot use sequence length %d because the BERT model "
         "was only trained up to sequence length %d" %
-        (FLAGS.max_seq_length, bert_config.max_position_embeddings))
+        (FLAGS.max_phrase_context_seq_length, bert_config.max_position_embeddings))
 
-  if FLAGS.max_seq_length <= FLAGS.max_query_length + 3:
+  if FLAGS.max_phrase_context_seq_length <= FLAGS.max_question_seq_length + 3:
     raise ValueError(
-        "The max_seq_length (%d) must be greater than max_query_length "
-        "(%d) + 3" % (FLAGS.max_seq_length, FLAGS.max_query_length))
+        "The max_phrase_context_seq_length (%d) must be greater than max_question_seq_length "
+        "(%d) + 3" % (FLAGS.max_phrase_context_seq_length, FLAGS.max_question_seq_length))
 
   ngpu = len(os.getenv('CUDA_VISIBLE_DEVICES', '0').split(','))
 
@@ -906,9 +931,9 @@ def main(_):
     convert_examples_to_features(
         examples=train_examples,
         tokenizer=tokenizer,
-        max_doc_phrase_input_length=FLAGS.max_seq_length,
+        max_doc_phrase_input_length=FLAGS.max_phrase_context_seq_length,
         doc_stride=FLAGS.doc_stride,
-        max_question_input_length=FLAGS.max_query_length,
+        max_question_input_length=FLAGS.max_question_seq_length,
         is_training=True,
         output_fn=train_writer.process_feature)
     train_writer.close()
@@ -944,9 +969,9 @@ def main(_):
     convert_examples_to_features(
         examples=eval_examples,
         tokenizer=tokenizer,
-        max_doc_phrase_input_length=FLAGS.max_seq_length,
+        max_doc_phrase_input_length=FLAGS.max_phrase_context_seq_length,
         doc_stride=FLAGS.doc_stride,
-        max_question_input_length=FLAGS.max_query_length,
+        max_question_input_length=FLAGS.max_question_seq_length,
         is_training=False,
         output_fn=append_feature)
 
@@ -976,6 +1001,9 @@ def main(_):
         predict_input_fn, yield_single_examples=True):
       if len(all_results) % 1000 == 0:
         tf.logging.info("Processing example: %d" % (len(all_results)))
+        if FLAGS.debug and len(all_results) >= 2000:
+          break
+        
       unique_id = int(result["unique_ids"])
       phrase_embedding = None
       question_embedding = None
