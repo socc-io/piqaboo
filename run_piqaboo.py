@@ -356,6 +356,12 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
         question_input_mask.append(0)
 
     question_segment_ids = [0] * max_question_input_length
+
+    # 랜덤 샘플링 대상 정하기
+    # todo : 지금은 정답과 오답이 1:1 이되도록 하므로 랜덤샘플이 한 개만 있으면 되지만, 여러개가 필요한 경우 샘플들의 set을 만들도록 코드 수정 필요.
+    random_index = random.randint(0, len(example.doc_tokens)-1)
+    random_window_size = random.randint(0, FLAGS.max_answer_length-1)
+
     # phrase + doc 인풋
     for i, token in enumerate(example.doc_tokens) :
         # 문서의 모든 토큰에 대해 케이스를 만듬.
@@ -365,8 +371,11 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
             end_idx = i + window_size
             label_sim = 0.0
             answer_tokens = tokenization.whitespace_tokenize(example.orig_answer_text)
+            # 정답이거나 랜덤샘플대상이거나. 그 외에는 생략.
             if example.doc_tokens[start_idx:(end_idx+1)] == answer_tokens:
                 label_sim = 1.0
+            elif i != random_index or window_size != random_window_size:
+                continue
 
             phrase_text = " ".join(example.doc_tokens[start_idx:(end_idx+1)])
             phrase_tokens = tokenizer.tokenize(" ".join(example.doc_tokens[start_idx:(end_idx+1)]));
