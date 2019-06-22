@@ -201,8 +201,9 @@ class SquadExample(object):
   def __repr__(self):
     s = ""
     s += "qas_id: %s" % (tokenization.printable_text(self.qas_id))
-    s += ", question_text: %s" % (
-        tokenization.printable_text(self.question_text))
+    s += ", article_title: %s" %(tokenization.printable_text(self.article_title))
+    s += ", question_text: %s" % (tokenization.printable_text(self.question_text))
+    s += ", original_answer_text: %s" % (str(self.orig_answer_text))
     s += ", doc_tokens: [%s]" % (" ".join(self.doc_tokens))
     if self.start_position:
       s += ", start_position: %d" % (self.start_position)
@@ -282,7 +283,7 @@ def read_squad_examples(input_file, is_training):
         question_text = qa["question"]
         start_position = None
         end_position = None
-        orig_answer_text = None
+        orig_answer_text = qa["answers"][0]["text"]
         is_impossible = False
         if is_training:
 
