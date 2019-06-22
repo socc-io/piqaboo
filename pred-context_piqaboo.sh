@@ -13,7 +13,7 @@ python run_piqaboo.py \
   --do_train=False \
   --train_file=$SQUAD_DIR/dev-v1.1.debug.json \
   --do_predict=True \
-  --predict_file=$SQUAD_DIR/dev-v1.1.debug.json \
+  --predict_file=$SQUAD_DIR/dev-v1.1.json \
   --train_batch_size=6 \
   --predict_batch_size=6 \
   --learning_rate=3e-5 \
