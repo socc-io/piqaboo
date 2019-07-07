@@ -374,7 +374,7 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
             # 정답이거나 랜덤샘플대상이거나. 그 외에는 생략.
             if example.doc_tokens[start_idx:(end_idx+1)] == answer_tokens:
                 label_sim = 1.0
-            elif i != random_index or window_size != random_window_size:
+            elif is_training and (i != random_index or window_size != random_window_size):
                 continue
 
             phrase_text = " ".join(example.doc_tokens[start_idx:(end_idx+1)])
