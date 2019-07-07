@@ -10,7 +10,7 @@ python run_piqaboo.py \
   --init_checkpoint=$BERT_DIR/bert_model.ckpt \
   --input_type=train \
   --do_train=True \
-  --train_file=$SQUAD_DIR/dev-v1.1.debug.json \
+  --train_file=$SQUAD_DIR/dev-v1.1.json \
   --do_predict=False \
   --predict_file=$SQUAD_DIR/dev-v1.1.json \
   --train_batch_size=6 \

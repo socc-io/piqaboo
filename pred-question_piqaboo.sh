@@ -21,4 +21,4 @@ python run_piqaboo.py \
   --max_phrase_context_seq_length=384 \
   --max_question_seq_length=64 \
   --output_dir=$OUTPUT_DIR/ \
-  --debug=True
+  --debug=False

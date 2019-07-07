@@ -744,6 +744,7 @@ def write_predictions_piqa(all_features, all_results, output_context_dir, output
    "qid": [1,1,1,1,1]
   }
   """
+  
   unique_id_to_result = {}
   for result in all_results:
     unique_id_to_result[result.unique_id] = result
@@ -789,7 +790,7 @@ def write_predictions_piqa(all_features, all_results, output_context_dir, output
       filename_np = os.path.join(output_context_dir, "%s_%s" % (title, para_key))
       np.savez(filename_np, phrase_embedding_np)
 
-      filename_json = os.path.join(output_context_dir, "%s_%s" % (title, para_key))
+      filename_json = os.path.join(output_context_dir, "%s_%s.json" % (title, para_key))
       with open(filename_json, "w") as fp:
         fp.write(json.dumps(phrase_text_list))
 
