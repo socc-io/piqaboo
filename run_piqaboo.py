@@ -345,9 +345,9 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
     # question 인풋
     question_tokens = ["[CLS]"]
     question_tokens.extend(tokenizer.tokenize(example.question_text))
+    if len(question_tokens) > max_question_input_length-1:
+      question_tokens = question_tokens[0:max_question_input_length-1]
     question_tokens.append("[SEP]")
-    if len(question_tokens) > max_question_input_length:
-      question_tokens = question_tokens[0:max_question_input_length]
 
     question_input_ids = tokenizer.convert_tokens_to_ids(question_tokens)
     question_input_mask = [1] * len(question_input_ids)
