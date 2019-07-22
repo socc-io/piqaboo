@@ -331,7 +331,7 @@ def read_squad_examples(input_file, is_training):
   return examples
 
 
-def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_length,
+def convert_examples_to_features(examples, tokenizer, max_doc_input_length,
                                  doc_stride, max_question_input_length, is_training,
                                  output_fn):
   """Loads a data file into a list of `InputBatch`s."""
@@ -342,7 +342,7 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
     article_title = example.article_title
     para_idx = example.para_idx
     qid = example.qas_id
-    # question 인풋
+    # 1. Question input
     question_tokens = ["[CLS]"]
     question_tokens.extend(tokenizer.tokenize(example.question_text))
     if len(question_tokens) > max_question_input_length-1:
@@ -357,108 +357,88 @@ def convert_examples_to_features(examples, tokenizer, max_doc_phrase_input_lengt
 
     question_segment_ids = [0] * max_question_input_length
 
+    # 2. Document input
+    # The -2 accounts for [CLS], [SEP]
+    max_tokens_for_doc = max_doc_phrase_input_length - 2
+    context_tokens = ["[CLS]"]
+    context_tokens.extend(example.doc_tokens[0:min(max_tokens_for_doc, len(example.doc_tokens))])
+    context_tokens.append("[SEP]")
+    context_input_ids = tokenizer.convert_tokens_to_ids(context_tokens)
+
+    # The mask has 1 for real tokens and 0 for padding tokens. Only real
+    # tokens are attended to.
+    context_input_mask = [1] * len(context_input_ids)
+
+    # Zero-pad up to the sequence length.
+    while len(context_input_ids) < max_doc_input_length:
+        context_input_ids.append(0)
+        context_input_mask.append(0)
+
+    # 3. Segment input
     # 랜덤 샘플링 대상 정하기
     # todo : 지금은 정답과 오답이 1:1 이되도록 하므로 랜덤샘플이 한 개만 있으면 되지만, 여러개가 필요한 경우 샘플들의 set을 만들도록 코드 수정 필요.
-    random_index = random.randint(0, len(example.doc_tokens)-1)
-    random_window_size = random.randint(0, FLAGS.max_answer_length-1)
+    random_start = random.randint(0, len(example.doc_tokens)-1)
+    random_end = min(random_start + random.randint(0, FLAGS.max_answer_length-1), len(example.doc_tokens)-1)
 
-    # phrase + doc 인풋
-    for i, token in enumerate(example.doc_tokens) :
-        # 문서의 모든 토큰에 대해 케이스를 만듬.
-        for window_size in range(FLAGS.max_answer_length):
-            # 현재 토큰에 대해서 윈도우 사이즈별로 케이스를 만든다. 정답인 경우에만 label_sim=1 이다
-            start_idx = i
-            end_idx = i + window_size
-            label_sim = 0.0
-            answer_tokens = tokenization.whitespace_tokenize(example.orig_answer_text)
-            # 정답이거나 랜덤샘플대상이거나. 그 외에는 생략.
-            if example.doc_tokens[start_idx:(end_idx+1)] == answer_tokens:
-                label_sim = 1.0
-            elif is_training and (i != random_index or window_size != random_window_size):
-                continue
+    start_list = [example.start_position, random_start]
+    end_list = [example.end_position, random_end]
+    label_list = [1.0, 0.0] # 첫번째 샘플은 정답이다.
+    for (start_idx, end_idx, label_sim) in zip(start_list, end_list, label_list):
+        # Target 이 있는 부분만 1로 처리
+        context_segment_ids = list()
+        context_segment_ids.append(0) # for [CLS]
+        context_segment_ids.extend([0]*(start_idx-1))
+        context_segment_ids.extend([1]*(end_idx-start_idx+1))
 
-            phrase_text = " ".join(example.doc_tokens[start_idx:(end_idx+1)])
-            phrase_tokens = tokenizer.tokenize(" ".join(example.doc_tokens[start_idx:(end_idx+1)]));
-            all_doc_tokens = tokenizer.tokenize(" ".join(example.doc_tokens))
+        # Zero-pad up to the sequence length.
+        while len(context_segment_ids) < max_doc_phrase_input_length:
+            context_segment_ids.append(0)
 
-            phrase_context_tokens = []
-            phrase_context_segment_ids = []
-            phrase_context_tokens.append("[CLS]")
-            phrase_context_segment_ids.append(0)
-            for phrase_token in phrase_tokens:
-                phrase_context_tokens.append(phrase_token)
-                phrase_context_segment_ids.append(0)
-
-            phrase_context_tokens.append("[SEP]")
-            phrase_context_segment_ids.append(0)
-
-            # The -3 accounts for [CLS], [SEP] and [SEP]
-            max_tokens_for_doc = max_doc_phrase_input_length - len(phrase_tokens) - 3
-            
-            truncated_all_doc_tokens = all_doc_tokens[0:max_tokens_for_doc]
-            phrase_context_tokens.extend(truncated_all_doc_tokens)
-            phrase_context_segment_ids.extend([1] * len(truncated_all_doc_tokens))
-
-            phrase_context_tokens.append("[SEP]")
-            phrase_context_segment_ids.append(1)
-
-            phrase_context_input_ids = tokenizer.convert_tokens_to_ids(phrase_context_tokens)
-
-            # The mask has 1 for real tokens and 0 for padding tokens. Only real
-            # tokens are attended to.
-            phrase_context_input_mask = [1] * len(phrase_context_input_ids)
-
-            # Zero-pad up to the sequence length.
-            while len(phrase_context_input_ids) < max_doc_phrase_input_length:
-                phrase_context_input_ids.append(0)
-                phrase_context_input_mask.append(0)
-                phrase_context_segment_ids.append(0)
-
-            assert len(phrase_context_input_ids) == max_doc_phrase_input_length
-            assert len(phrase_context_input_mask) == max_doc_phrase_input_length
-            assert len(phrase_context_segment_ids) == max_doc_phrase_input_length
+        assert len(context_input_ids) == max_doc_phrase_input_length
+        assert len(context_input_mask) == max_doc_phrase_input_length
+        assert len(context_segment_ids) == max_doc_phrase_input_length
 
 
-            if example_index < 3 and label_sim==1.0 and FLAGS.debug:
-                tf.logging.info("*** Example ***")
-                tf.logging.info("unique_id: %s" % (unique_id))
-                tf.logging.info("example_index: %s" % (example_index))
-                tf.logging.info("question_tokens: %s" % " ".join(
-                    [tokenization.printable_text(x) for x in question_tokens]))
-                tf.logging.info("question_input_ids: %s" % " ".join([str(x) for x in question_input_ids]))
-                tf.logging.info(
-                    "question_input_mask: %s" % " ".join([str(x) for x in question_input_mask]))
-                tf.logging.info(
-                    "question_segment_ids: %s" % " ".join([str(x) for x in question_segment_ids]))
-                tf.logging.info("phrase_context_tokens: %s" % " ".join(
-                    [tokenization.printable_text(x) for x in phrase_context_tokens]))
-                tf.logging.info("phrase_context_input_ids: %s" % " ".join([str(x) for x in phrase_context_input_ids]))
-                tf.logging.info(
-                    "phrase_context_input_mask: %s" % " ".join([str(x) for x in phrase_context_input_mask]))
-                tf.logging.info(
-                    "phrase_context_segment_ids: %s" % " ".join([str(x) for x in phrase_context_segment_ids]))
+        if example_index < 3 and label_sim==1.0 and FLAGS.debug:
+            tf.logging.info("*** Example ***")
+            tf.logging.info("unique_id: %s" % (unique_id))
+            tf.logging.info("example_index: %s" % (example_index))
+            tf.logging.info("question_tokens: %s" % " ".join(
+                [tokenization.printable_text(x) for x in question_tokens]))
+            tf.logging.info("question_input_ids: %s" % " ".join([str(x) for x in question_input_ids]))
+            tf.logging.info(
+                "question_input_mask: %s" % " ".join([str(x) for x in question_input_mask]))
+            tf.logging.info(
+                "question_segment_ids: %s" % " ".join([str(x) for x in question_segment_ids]))
+            tf.logging.info("phrase_context_tokens: %s" % " ".join(
+                [tokenization.printable_text(x) for x in context_tokens]))
+            tf.logging.info("phrase_context_input_ids: %s" % " ".join([str(x) for x in context_input_ids]))
+            tf.logging.info(
+                "phrase_context_input_mask: %s" % " ".join([str(x) for x in context_input_mask]))
+            tf.logging.info(
+                "phrase_context_segment_ids: %s" % " ".join([str(x) for x in context_segment_ids]))
 
-            feature = InputFeatures(
-              unique_id=unique_id,
-              article_title=article_title,
-              qid=qid,
-              para_idx=para_idx,
-              phrase_text=phrase_text,
-              example_index=example_index,
-              tokens=phrase_context_tokens,
-              phrase_context_input_ids=phrase_context_input_ids,
-              phrase_context_input_mask=phrase_context_input_mask,
-              phrase_context_segment_ids=phrase_context_segment_ids,
-              question_input_ids=question_input_ids,
-              question_input_mask=question_input_mask,
-              question_segment_ids=question_segment_ids,
-              label_sim=label_sim
-            )
+        feature = InputFeatures(
+          unique_id=unique_id,
+          article_title=article_title,
+          qid=qid,
+          para_idx=para_idx,
+          phrase_text=phrase_text,
+          example_index=example_index,
+          tokens=context_tokens,
+          phrase_context_input_ids=context_input_ids,
+          phrase_context_input_mask=context_input_mask,
+          phrase_context_segment_ids=context_segment_ids,
+          question_input_ids=question_input_ids,
+          question_input_mask=question_input_mask,
+          question_segment_ids=question_segment_ids,
+          label_sim=label_sim
+        )
 
-            # Run callback
-            output_fn(feature)
+        # Run callback
+        output_fn(feature)
 
-            unique_id += 1
+        unique_id += 1
 
 
 def _improve_answer_span(doc_tokens, input_start, input_end, tokenizer,
